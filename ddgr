@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 #
 # Copyright (C) 2016 Arun Prakash Jana <engineerarun@gmail.com>
 #
@@ -15,15 +16,17 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+from __future__ import with_statement
+from __future__ import absolute_import
 import argparse
 import atexit
 import collections
 import functools
 import gzip
-import html.entities
-import html.parser
-import http.client
-from http.client import HTTPSConnection
+import htmlentitydefs
+import HTMLParser
+import httplib
+from httplib import HTTPSConnection
 import socket
 import ssl
 import io
@@ -33,9 +36,10 @@ import platform
 import signal
 import sys
 import textwrap
-import urllib.parse
+import urllib2, urllib, urlparse
 import readline
 import webbrowser
+from io import open
 
 # Basic setup
 
@@ -43,7 +47,7 @@ logging.basicConfig(format='[%(levelname)s] %(message)s')
 logger = logging.getLogger()
 
 def sigint_handler(signum, frame):
-    print('\nInterrupted.', file=sys.stderr)
+    print >>sys.stderr, '\nInterrupted.'
     sys.exit(1)
 
 signal.signal(signal.SIGINT, sigint_handler)
@@ -91,7 +95,7 @@ def printerr(msg):
 
     ``msg`` could be any stringifiable value.
     """
-    print(msg, file=sys.stderr)
+    print >>sys.stderr, msg
 
 # Classes
 
@@ -397,11 +401,11 @@ class DdgUrl(object):
         keywords = self._keywords
         if keywords:
             if isinstance(keywords, list):
-                q += '+'.join([urllib.parse.quote_plus(kw) for kw in keywords])
+                q += '+'.join([urllib.quote_plus(kw) for kw in keywords])
             else:
-                q += urllib.parse.quote_plus(keywords)
+                q += urllib.quote_plus(keywords)
         if self._site:
-            q += '+site:' + urllib.parse.quote_plus(self._site)
+            q += '+site:' + urllib.quote_plus(self._site)
         qd['q'] = q
 
         return '&'.join(['%s=%s' % (k, qd[k]) for k in sorted(qd.keys())])
@@ -486,7 +490,7 @@ class DdgConnection(object):
 
             try:
                 self._conn.connect()
-            except Exception as e:
+            except Exception, e:
                 msg = 'Failed to connect to proxy server %s: %s.' % (proxy, e)
                 raise DDGConnectionError(msg)
         else:
@@ -494,7 +498,7 @@ class DdgConnection(object):
             self._conn = TLS1_2Connection(host, port=port, timeout=timeout)
             try:
                 self._conn.connect()
-            except Exception as e:
+            except Exception, e:
                 msg = 'Failed to connect to %s: %s.' % (host_display, e)
                 raise DDGConnectionError(msg)
 
@@ -532,13 +536,13 @@ class DdgConnection(object):
         """
         try:
             self._raw_get(url)
-        except (http.client.HTTPException, OSError) as e:
+        except (httplib.HTTPException, OSError), e:
             logger.debug('Got exception: %s.', e)
             logger.debug('Attempting to reconnect...')
             self.renew_connection()
             try:
                 self._raw_get(url)
-            except http.client.HTTPException as e:
+            except httplib.HTTPException, e:
                 logger.debug('Got exception: %s.', e)
                 raise DDGConnectionError("Failed to get '%s'." % url)
 
@@ -578,16 +582,16 @@ class DdgConnection(object):
 
         """
         logger.debug('Redirecting to URL %s', url)
-        segments = urllib.parse.urlparse(url)
+        segments = urlparse.urlparse(url)
 
         host = segments.netloc
         if host != self._host:
             self.new_connection(host)
 
-        relurl = urllib.parse.urlunparse(('', '') + segments[2:])
+        relurl = urlparse.urlunparse(('', '') + segments[2:])
         try:
             self._raw_get(relurl)
-        except http.client.HTTPException as e:
+        except httplib.HTTPException, e:
             logger.debug('Got exception: %s.', e)
             raise DDGConnectionError("Failed to get '%s'." % url)
 
@@ -658,7 +662,7 @@ def retrieve_tag_annotation(annotated_endtag_handler):
 
     return handler
 
-class DdgParser(html.parser.HTMLParser):
+class DdgParser(HTMLParser.HTMLParser):
     """The members of this class parse the result HTML
     page fetched from DuckDuckGo server for a query.
 
@@ -772,7 +776,7 @@ class DdgParser(html.parser.HTMLParser):
     #   </h2>
 
     def __init__(self, news=False):
-        html.parser.HTMLParser.__init__(self)
+        HTMLParser.HTMLParser.__init__(self)
 
         self.news = news
 
@@ -860,7 +864,7 @@ class DdgParser(html.parser.HTMLParser):
             try:
                 start = self.url.index('?q=') + len('?q=')
                 end = self.url.index('&sa=', start)
-                self.url = urllib.parse.unquote_plus(self.url[start:end])
+                self.url = urllib.unquote_plus(self.url[start:end])
             except ValueError:
                 pass
             self.start_populating_textbuf()
@@ -934,7 +938,7 @@ class DdgParser(html.parser.HTMLParser):
 
     def record_entityref(self, ref):
         try:
-            self.textbuf += chr(html.entities.name2codepoint[ref])
+            self.textbuf += unichr(htmlentitydefs.name2codepoint[ref])
         except KeyError:
             # Entity name not found; most likely rather sloppy HTML
             # where a literal ampersand is not escaped; For instance,
@@ -948,9 +952,9 @@ class DdgParser(html.parser.HTMLParser):
 
     def record_charref(self, ref):
         if ref.startswith('x'):
-            char = chr(int(ref[1:], 16))
+            char = unichr(int(ref[1:], 16))
         else:
-            char = chr(int(ref))
+            char = unichr(int(ref))
         self.textbuf += char
 
     @staticmethod
@@ -990,7 +994,7 @@ class Result(object):
 
     Methods
     -------
-    print()
+    print2term()
     jsonizable_object()
     urltable()
 
@@ -1000,7 +1004,7 @@ class Result(object):
     colors = None
 
     def __init__(self, index, title, url, abstract, metadata=None):
-        index = str(index)
+        index = unicode(index)
         self.index = index
         self.title = title
         self.url = url
@@ -1014,42 +1018,42 @@ class Result(object):
         colors = self.colors
 
         # Pad index and url with `indent` number of spaces
-        index = ' ' * indent + str(index)
+        index = ' ' * indent + unicode(index)
         url = ' ' * indent + url
         if colors:
-            print(colors.index + index + colors.reset, end='')
-            print(' ' + colors.title + title + colors.reset)
-            print(colors.url + url + colors.reset)
+            print colors.index + index + colors.reset,; sys.stdout.write('')
+            print ' ' + colors.title + title + colors.reset
+            print colors.url + url + colors.reset
         else:
-            print(' %s %s\n%s' % (index, title, url))
+            print ' %s %s\n%s' % (index, title, url)
 
     def _print_metadata_and_abstract(self, abstract, metadata=None, indent=0):
         colors = self.colors
         try:
-            columns, _ = os.get_terminal_size()
+            _, columns = map(int, os.popen('stty size', 'r').read().split())
         except OSError:
             columns = 0
 
         if metadata:
             if colors:
-                print(colors.metadata + metadata + colors.reset)
+                print colors.metadata + metadata + colors.reset
             else:
-                print(metadata)
+                print metadata
 
         if colors:
-            print(colors.abstract, end='')
+            print colors.abstract,; sys.stdout.write('')
         if columns > indent + 1:
             # Try to fill to columns
             fillwidth = columns - indent - 1
             for line in textwrap.wrap(abstract.replace('\n', ''), width=fillwidth):
-                print('%s%s' % (' ' * indent, line))
-            print('')
+                print '%s%s' % (' ' * indent, line)
+            print ''
         else:
-            print('%s\n' % abstract.replace('\n', ' '))
+            print '%s\n' % abstract.replace('\n', ' ')
         if colors:
-            print(colors.reset, end='')
+            print colors.reset,; sys.stdout.write('')
 
-    def print(self):
+    def print2term(self):
         """Print the result entry."""
         self._print_title_and_url(self.index, self.title, self.url)
         self._print_metadata_and_abstract(self.abstract, metadata=self.metadata)
@@ -1146,7 +1150,7 @@ class DdgCmd(object):
     colors = None
 
     def __init__(self, opts):
-        super().__init__()
+        super(DdgCmd, self).__init__()
 
         self._opts = opts
 
@@ -1218,15 +1222,15 @@ class DdgCmd(object):
             # JSON output
             import json
             results_object = [r.jsonizable_object() for r in self.results]
-            print(json.dumps(results_object, indent=2, sort_keys=True, ensure_ascii=False))
+            print json.dumps(results_object, indent=2, sort_keys=True, ensure_ascii=False)
         else:
             # Regular output
             if not self.results:
-                print('No results.', file=sys.stderr)
+                print >>sys.stderr, 'No results.'
             else:
                 sys.stderr.write(prelude)
                 for r in self.results:
-                    r.print()
+                    r.print2term()
 
     @require_keywords
     def fetch_and_display(self, prelude='\n', json_output=False, interactive=True):
@@ -1278,7 +1282,7 @@ class DdgCmd(object):
         enter_count = 0
         while True:
             try:
-                cmd = input(prompt)
+                cmd = raw_input(prompt)
             except EOFError:
                 sys.exit(0)
 
@@ -1322,7 +1326,7 @@ class DdgCmd(object):
         # If > 5 results are being fetched each time,
         # block next when no parsed results in current fetch
         if not self.results and self._ddg_url._num > 5:
-            print('No results.', file=sys.stderr)
+            print >>sys.stderr, 'No results.'
         else:
             self._ddg_url.next_page()
             self.fetch_and_display()
@@ -1337,8 +1341,8 @@ class DdgCmd(object):
     def do_previous(self):
         try:
             self._ddg_url.prev_page()
-        except ValueError as e:
-            print(e, file=sys.stderr)
+        except ValueError, e:
+            print >>sys.stderr, e
             return
 
         self.fetch_and_display()
@@ -1426,7 +1430,7 @@ class DdgArgumentParser(argparse.ArgumentParser):
 
     # Augment print_help to print more than synopsis and options
     def print_help(self, file=None):
-        super().print_help(file)
+        super(DdgArgumentParser, self).print_help(file)
         self.print_omniprompt_help(file)
         self.print_general_info(file)
 
@@ -1577,14 +1581,14 @@ def main():
                 if repl.results:
                     open_url(repl.results[0].url)
                 else:
-                    print('No results.', file=sys.stderr)
+                    print >>sys.stderr, 'No results.'
             else:
                 repl.display_results(prelude='', json_output=opts.json)
             sys.exit(0)
         else:
             # Interactive mode
             repl.cmdloop()
-    except Exception as e:
+    except Exception, e:
         # If debugging mode is enabled, let the exception through for a traceback;
         # otherwise, only print the exception error message.
         if logger.isEnabledFor(logging.DEBUG):
